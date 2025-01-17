@@ -8,6 +8,7 @@ pub mod miwu;
 pub mod gpio_miwu;
 
 pub mod i2c;
+pub mod spip;
 pub use npcx490m_pac as pac;
 
 #[non_exhaustive]

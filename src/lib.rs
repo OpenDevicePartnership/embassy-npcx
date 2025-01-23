@@ -371,6 +371,7 @@ embassy_hal_internal::peripherals!(
     CR_UART2,
     CR_UART3,
     CR_UART4,
+    SPIP,
     #[cfg(not(feature = "time-driver-mft16-1"))]
     MFT16_1,
     #[cfg(not(feature = "time-driver-mft16-2"))]

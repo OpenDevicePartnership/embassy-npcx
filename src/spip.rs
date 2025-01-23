@@ -1,9 +1,12 @@
 use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
 
-use crate::pac::{self, interrupt};
+use crate::{
+    pac::{self, interrupt},
+    peripherals::SPIP,
+};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
-use embedded_hal::spi::{Mode, Phase, Polarity};
+use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
 
 pub type MosiPin = crate::peripherals::PK12;
 pub type MisoPin = crate::peripherals::PM12;
@@ -22,14 +25,69 @@ pub struct Config {
     pub frequency: (),
 }
 
-/// Driver for the SPI (Master) Peripheral.
-pub struct Spip<'d, T> {
-    peri: PeripheralRef<'d, pac::Spip>,
-    _mod: PhantomData<T>,
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            mode: MODE_0,
+            frequency: (),
+        }
+    }
 }
 
-impl<'d, T> Spip<'d, T> {
-    fn init(peri: &mut PeripheralRef<'d, pac::Spip>, config: Config, mod_: bool) {
+#[allow(private_bounds)]
+mod sealed {
+    pub trait SealedInstance {
+        fn regs() -> &'static crate::pac::spip::RegisterBlock;
+    }
+}
+
+pub trait Instance: Peripheral<P = Self> + sealed::SealedInstance + 'static + Send {}
+
+impl sealed::SealedInstance for SPIP {
+    fn regs() -> &'static pac::spip::RegisterBlock {
+        let ptr = crate::pac::Spip::ptr();
+
+        // Safety:
+        // the pac ptr functions return pointers to memory that is used for registers for the 'static lifetime
+        // and the created reference is shared.
+        unsafe { &*ptr }
+    }
+}
+impl Instance for SPIP {}
+
+/// Driver for the SPI (Master) Peripheral.
+pub struct Spip<'d, T: Instance, U> {
+    _peri: PeripheralRef<'d, T>,
+    _mod: PhantomData<U>,
+}
+
+pub trait WordConvertible: Copy + 'static {
+    fn to_base(self) -> u16;
+    fn from_base(_: u16) -> Self;
+}
+
+impl WordConvertible for u8 {
+    fn to_base(self) -> u16 {
+        self as u16
+    }
+
+    fn from_base(x: u16) -> Self {
+        x as u8 // Throw away extra byte.
+    }
+}
+
+impl WordConvertible for u16 {
+    fn to_base(self) -> u16 {
+        self
+    }
+
+    fn from_base(x: u16) -> Self {
+        x
+    }
+}
+
+impl<'d, T: Instance, U> Spip<'d, T, U> {
+    fn init(config: Config, mod_: bool) {
         // Configure SPI pins to peripheral, safe because we took ownership.
         // Note(cs): other peripherals might also be modifying devalt0 at the same time.
         critical_section::with(|_| {
@@ -37,7 +95,7 @@ impl<'d, T> Spip<'d, T> {
             sysconfig.devalt0().modify(|_, w| w.spip_sl().set_bit());
         });
 
-        peri.spip_ctl1().modify(|_, w| {
+        T::regs().spip_ctl1().modify(|_, w| {
             w.spien().set_bit();
             w.mod_().bit(mod_);
             w.scidl().bit(config.mode.polarity == Polarity::IdleHigh);
@@ -48,15 +106,16 @@ impl<'d, T> Spip<'d, T> {
     }
 
     async fn transfer_word(&mut self, data: u16) -> u16 {
-        self.peri.spip_ctl1().modify(|_, w| w.eir().set_bit());
-        self.peri.spip_data().write(|w| unsafe { w.bits(data) });
+        let r = T::regs();
+        r.spip_ctl1().modify(|_, w| w.eir().set_bit());
+        r.spip_data().write(|w| unsafe { w.bits(data) });
 
         poll_fn(|cx| {
             WAKER.register(cx.waker());
 
-            if self.peri.spip_stat().read().rbf().bit_is_set() {
+            if r.spip_stat().read().rbf().bit_is_set() {
                 // Reading the data clears the rbf-bit.
-                let data = self.peri.spip_data().read().bits();
+                let data = r.spip_data().read().bits();
                 Poll::Ready(data)
             } else {
                 Poll::Pending
@@ -66,9 +125,9 @@ impl<'d, T> Spip<'d, T> {
     }
 }
 
-impl<'d> Spip<'d, u8> {
+impl<'d, T: Instance> Spip<'d, T, u8> {
     pub fn new_8bit(
-        peri: impl Peripheral<P = pac::Spip> + 'd,
+        peri: impl Peripheral<P = T> + 'd,
         mosi: impl Peripheral<P = MosiPin> + 'd,
         miso: impl Peripheral<P = MisoPin> + 'd,
         sclk: impl Peripheral<P = SclkPin> + 'd,
@@ -79,18 +138,18 @@ impl<'d> Spip<'d, u8> {
         // We only tie the pins to our lifetime, discard.
         let _ = (mosi, miso, sclk);
 
-        Self::init(&mut peri, config, false);
+        Self::init(config, false);
 
         Self {
-            peri,
+            _peri: peri,
             _mod: Default::default(),
         }
     }
 }
 
-impl<'d> Spip<'d, u16> {
+impl<'d, T: Instance> Spip<'d, T, u16> {
     pub fn new_16bit(
-        peri: impl Peripheral<P = pac::Spip> + 'd,
+        peri: impl Peripheral<P = T> + 'd,
         mosi: impl Peripheral<P = MosiPin> + 'd,
         miso: impl Peripheral<P = MisoPin> + 'd,
         sclk: impl Peripheral<P = SclkPin> + 'd,
@@ -101,50 +160,50 @@ impl<'d> Spip<'d, u16> {
         // We only tie the pins to our lifetime, discard.
         let _ = (mosi, miso, sclk);
 
-        Self::init(&mut peri, config, true);
+        Self::init(config, true);
 
         Self {
-            peri,
+            _peri: peri,
             _mod: Default::default(),
         }
     }
 }
 
-impl<T> Drop for Spip<'_, T> {
+impl<T: Instance, U> Drop for Spip<'_, T, U> {
     fn drop(&mut self) {
-        self.peri.spip_ctl1().modify(|_, w| w.spien().clear_bit());
+        T::regs().spip_ctl1().modify(|_, w| w.spien().clear_bit());
     }
 }
 
-impl<T> embedded_hal_async::spi::ErrorType for Spip<'_, T> {
+impl<T: Instance, U> embedded_hal_async::spi::ErrorType for Spip<'_, T, U> {
     type Error = Infallible;
 }
 
-impl<T: Copy + 'static + From<u16> + Into<u16>> embedded_hal_async::spi::SpiBus<T> for Spip<'_, T> {
-    async fn read(&mut self, words: &mut [T]) -> Result<(), Self::Error> {
+impl<T: Instance, U: WordConvertible> embedded_hal_async::spi::SpiBus<U> for Spip<'_, T, U> {
+    async fn read(&mut self, words: &mut [U]) -> Result<(), Self::Error> {
         for r in words {
-            *r = self.transfer_word(0x0000).await.into();
+            *r = U::from_base(self.transfer_word(0x0000).await);
         }
         Ok(())
     }
 
-    async fn write(&mut self, words: &[T]) -> Result<(), Self::Error> {
+    async fn write(&mut self, words: &[U]) -> Result<(), Self::Error> {
         for w in words {
-            self.transfer_word((*w).into()).await;
+            self.transfer_word((*w).to_base()).await;
         }
         Ok(())
     }
 
-    async fn transfer(&mut self, read: &mut [T], write: &[T]) -> Result<(), Self::Error> {
+    async fn transfer(&mut self, read: &mut [U], write: &[U]) -> Result<(), Self::Error> {
         for (r, w) in read.iter_mut().zip(write.iter()) {
-            *r = self.transfer_word((*w).into()).await.into();
+            *r = U::from_base(self.transfer_word((*w).to_base()).await);
         }
         Ok(())
     }
 
-    async fn transfer_in_place(&mut self, words: &mut [T]) -> Result<(), Self::Error> {
+    async fn transfer_in_place(&mut self, words: &mut [U]) -> Result<(), Self::Error> {
         for rw in words {
-            *rw = self.transfer_word((*rw).into()).await.into();
+            *rw = U::from_base(self.transfer_word((*rw).to_base()).await);
         }
         Ok(())
     }

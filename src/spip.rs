@@ -1,9 +1,8 @@
-use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
-
 use crate::{
     pac::{self, interrupt},
     peripherals::SPIP,
 };
+use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
@@ -61,61 +60,73 @@ pub struct Spip<'d, T: Instance, U> {
     _mod: PhantomData<U>,
 }
 
-pub trait WordConvertible: Copy + 'static {
-    fn to_base(self) -> u16;
-    fn from_base(_: u16) -> Self;
+pub trait SpipPrimitive: Copy + 'static {
+    fn zero() -> Self;
 }
 
-impl WordConvertible for u8 {
-    fn to_base(self) -> u16 {
-        self as u16
-    }
-
-    fn from_base(x: u16) -> Self {
-        x as u8 // Throw away extra byte.
+impl SpipPrimitive for u8 {
+    fn zero() -> Self {
+        0
     }
 }
 
-impl WordConvertible for u16 {
-    fn to_base(self) -> u16 {
-        self
-    }
-
-    fn from_base(x: u16) -> Self {
-        x
+impl SpipPrimitive for u16 {
+    fn zero() -> Self {
+        0
     }
 }
 
-impl<'d, T: Instance, U> Spip<'d, T, U> {
+impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
     fn init(config: Config, mod_: bool) {
-        // Configure SPI pins to peripheral, safe because we took ownership.
         // Note(cs): other peripherals might also be modifying devalt0 at the same time.
         critical_section::with(|_| {
             let sysconfig = unsafe { crate::pac::Sysconfig::steal() };
-            sysconfig.devalt0().modify(|_, w| w.spip_sl().set_bit());
+
+            // Reset all device registers.
+            sysconfig.swrst_ctl2().write(|w| w.spip_rst().set_bit());
+            sysconfig.swrst_trg().write(|w| unsafe { w.bits(0xC183) });
+            while sysconfig.swrst_ctl2().read().spip_rst().bit_is_set() {}
+
+            // Configure SPI pins to peripheral, safe because we took ownership.
+            sysconfig
+                .devalt0()
+                .modify(|_, w| w.spip_sl().set_bit().gpio_no_spip().clear_bit());
+
+            sysconfig.pupd_en1().modify(|_, w| w.spip_pd_en().clear_bit());
         });
 
         T::regs().spip_ctl1().modify(|_, w| {
-            w.spien().set_bit();
             w.mod_().bit(mod_);
             w.scidl().bit(config.mode.polarity == Polarity::IdleHigh);
             w.scm().bit(config.mode.phase == Phase::CaptureOnSecondTransition);
-            unsafe { w.scdv6_0().bits(2) }; // TODO clocking freq
+            unsafe { w.scdv6_0().bits(0b0) }; // TODO clocking freq
             w
         });
+
+        T::regs().spip_ctl1().modify(|_, w| w.spien().set_bit());
     }
 
-    async fn transfer_word(&mut self, data: u16) -> u16 {
+    async fn transfer_word(&mut self, data: U) -> U {
         let r = T::regs();
-        r.spip_ctl1().modify(|_, w| w.eir().set_bit());
-        r.spip_data().write(|w| unsafe { w.bits(data) });
 
-        poll_fn(|cx| {
+        let stat = r.spip_stat().read();
+        assert!(stat.bsy().bit_is_clear() && stat.rbf().bit_is_clear());
+
+        r.spip_ctl1().modify(|_, w| w.eiw().set_bit().eir().set_bit());
+
+        let ptr = r.spip_data().as_ptr();
+        // The manual states that the read from the register must correspond with the size as
+        // specified in the MOD register.
+        let ptr = ptr as *mut U;
+
+        // Starts the transaction.
+        unsafe { ptr.write_volatile(data) };
+
+        poll_fn(move |cx| {
             WAKER.register(cx.waker());
-
             if r.spip_stat().read().rbf().bit_is_set() {
                 // Reading the data clears the rbf-bit.
-                let data = r.spip_data().read().bits();
+                let data = unsafe { ptr.read_volatile() };
                 Poll::Ready(data)
             } else {
                 Poll::Pending
@@ -179,31 +190,31 @@ impl<T: Instance, U> embedded_hal_async::spi::ErrorType for Spip<'_, T, U> {
     type Error = Infallible;
 }
 
-impl<T: Instance, U: WordConvertible> embedded_hal_async::spi::SpiBus<U> for Spip<'_, T, U> {
+impl<T: Instance, U: SpipPrimitive> embedded_hal_async::spi::SpiBus<U> for Spip<'_, T, U> {
     async fn read(&mut self, words: &mut [U]) -> Result<(), Self::Error> {
         for r in words {
-            *r = U::from_base(self.transfer_word(0x0000).await);
+            *r = self.transfer_word(U::zero()).await;
         }
         Ok(())
     }
 
     async fn write(&mut self, words: &[U]) -> Result<(), Self::Error> {
         for w in words {
-            self.transfer_word((*w).to_base()).await;
+            self.transfer_word(*w).await;
         }
         Ok(())
     }
 
     async fn transfer(&mut self, read: &mut [U], write: &[U]) -> Result<(), Self::Error> {
         for (r, w) in read.iter_mut().zip(write.iter()) {
-            *r = U::from_base(self.transfer_word((*w).to_base()).await);
+            *r = self.transfer_word(*w).await;
         }
         Ok(())
     }
 
     async fn transfer_in_place(&mut self, words: &mut [U]) -> Result<(), Self::Error> {
         for rw in words {
-            *rw = U::from_base(self.transfer_word((*rw).to_base()).await);
+            *rw = self.transfer_word(*rw).await;
         }
         Ok(())
     }
@@ -216,6 +227,15 @@ impl<T: Instance, U: WordConvertible> embedded_hal_async::spi::SpiBus<U> for Spi
 #[pac::interrupt]
 fn SPIP() {
     let spip = unsafe { pac::Spip::steal() };
-    spip.spip_ctl1().modify(|_, w| w.eir().clear_bit());
-    WAKER.wake();
+    let stat = spip.spip_stat().read();
+
+    // TODO probably not necessary.
+    if stat.bsy().bit_is_clear() && spip.spip_ctl1().read().eiw().bit_is_set() {
+        spip.spip_ctl1().modify(|_, w| w.eiw().clear_bit());
+    }
+
+    if stat.rbf().bit_is_set() {
+        spip.spip_ctl1().modify(|_, w| w.eir().clear_bit());
+        WAKER.wake();
+    }
 }

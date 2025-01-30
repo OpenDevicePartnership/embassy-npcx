@@ -1,4 +1,4 @@
-use crate::{pac, peripherals::SPIP};
+use crate::{cdcg, pac, peripherals::SPIP};
 use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
@@ -8,22 +8,26 @@ pub type MosiPin = crate::peripherals::PK12;
 pub type MisoPin = crate::peripherals::PM12;
 pub type SclkPin = crate::peripherals::PL12;
 
+const MAX_FREQUENCY: u32 = 12_500_000;
+
 /// SPIP configuration.
 #[non_exhaustive]
 #[derive(Clone)]
 pub struct Config {
-    /// SPI mode
+    /// SPI mode.
     pub mode: Mode,
 
-    // TODO
-    pub frequency: (),
+    /// Bus frequency at which SCLK will operate.
+    ///
+    /// Maximum supported frequency is 12.5MHz.
+    pub frequency: u32,
 }
 
 impl Default for Config {
     fn default() -> Self {
         Self {
             mode: MODE_0,
-            frequency: (),
+            frequency: 1_000_000,
         }
     }
 }
@@ -100,12 +104,21 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
             sysconfig.pupd_en1().modify(|_, w| w.spip_pd_en().clear_bit());
         });
 
+        // Note(safety): SPIP can only be constructed after clocks have been initialized.
+        let srcclk = unsafe { cdcg::get_clocks() }.apb2_clk;
+
+        assert!(config.frequency <= MAX_FREQUENCY);
+
+        // Best-effort divisor selection, rounded up.
+        let div = srcclk.div_ceil(config.frequency).clamp(2, 256);
+        let scdv6_0 = (div / 2) - 1;
+
         let r = T::regs();
         r.spip_ctl1().modify(|_, w| {
             w.mod_().bit(mod_);
             w.scidl().bit(config.mode.polarity == Polarity::IdleHigh);
             w.scm().bit(config.mode.phase == Phase::CaptureOnSecondTransition);
-            unsafe { w.scdv6_0().bits(0x20) }; // TODO clocking freq
+            unsafe { w.scdv6_0().bits(scdv6_0 as u8) };
             w
         });
 

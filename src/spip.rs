@@ -1,4 +1,4 @@
-use crate::{cdcg, pac, peripherals::SPIP};
+use crate::{cdcg, interrupt::typelevel::Interrupt, pac, peripherals::SPIP};
 use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
@@ -86,7 +86,11 @@ impl SpipPrimitive for u16 {}
 
 #[allow(private_bounds)]
 impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
-    fn init(config: Config, mod_: bool) {
+    fn init(
+        _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
+        config: Config,
+        mod_: bool,
+    ) {
         // Note(cs): other peripherals might also be modifying swsrst* and devalt0 at the same time.
         critical_section::with(|_| {
             let sysconfig = unsafe { crate::pac::Sysconfig::steal() };
@@ -121,6 +125,11 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
             unsafe { w.scdv6_0().bits(scdv6_0 as u8) };
             w
         });
+
+        // Safety: _irqs ensures an interrupt handler is bound
+        unsafe {
+            T::Interrupt::enable();
+        }
 
         r.spip_ctl1().modify(|_, w| w.spien().set_bit());
     }
@@ -161,6 +170,7 @@ impl<'d, T: Instance> Spip<'d, T, u8> {
         mosi: impl Peripheral<P = MosiPin> + 'd,
         miso: impl Peripheral<P = MisoPin> + 'd,
         sclk: impl Peripheral<P = SclkPin> + 'd,
+        irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
         into_ref!(peri);
@@ -168,7 +178,7 @@ impl<'d, T: Instance> Spip<'d, T, u8> {
         // We only tie the pins to our lifetime, discard.
         let _ = (mosi, miso, sclk);
 
-        Self::init(config, false);
+        Self::init(irqs, config, false);
 
         Self {
             _peri: peri,
@@ -183,6 +193,7 @@ impl<'d, T: Instance> Spip<'d, T, u16> {
         mosi: impl Peripheral<P = MosiPin> + 'd,
         miso: impl Peripheral<P = MisoPin> + 'd,
         sclk: impl Peripheral<P = SclkPin> + 'd,
+        irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
         into_ref!(peri);
@@ -190,7 +201,7 @@ impl<'d, T: Instance> Spip<'d, T, u16> {
         // We only tie the pins to our lifetime, discard.
         let _ = (mosi, miso, sclk);
 
-        Self::init(config, true);
+        Self::init(irqs, config, true);
 
         Self {
             _peri: peri,

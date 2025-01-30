@@ -26,12 +26,10 @@ async fn main(_spawner: Spawner) {
     let config = Config::default();
     let (p, _) = embassy_npcx::init_espi(config);
 
-    unsafe { hal::interrupt::SPIP.enable() };
-
     let mut config: hal::spip::Config = Default::default();
     // config.mode.polarity = embedded_hal_async::spi::Polarity::IdleHigh;
 
-    let spip = Spip::new_8bit(p.SPIP, p.PK12, p.PM12, p.PL12, config);
+    let spip = Spip::new_8bit(p.SPIP, p.PK12, p.PM12, p.PL12, Irqs, config);
     let spip = Mutex::<NoopRawMutex, Spip<SPIP, u8>>::new(spip);
 
     let cs0: OutputOpenDrain<'_, OutputOnly> = OutputOpenDrain::<'_, OutputOnly>::new(p.PL10, Level::High);

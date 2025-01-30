@@ -10,6 +10,8 @@ defmt = "0.3.8"
 defmt-rtt = "0.4.1"
 embassy-npcx = { path = "../", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "defmt"] }
+embassy-embedded-hal = { version = "0.3.0", default-features = false }
+embassy-sync = { version = "0.6.2", default-features = false }
 panic-probe = { version = "0.3.2", features = ["print-defmt"] }
 
 embedded-hal = "1.0"

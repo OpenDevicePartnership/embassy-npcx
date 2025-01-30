@@ -55,30 +55,20 @@ impl sealed::SealedInstance for SPIP {
 impl Instance for SPIP {}
 
 /// Driver for the SPI (Master) Peripheral.
-pub struct Spip<'d, T: Instance, U> {
+pub struct Spip<'d, T: Instance, U = u8> {
     _peri: PeripheralRef<'d, T>,
     _mod: PhantomData<U>,
 }
 
-pub trait SpipPrimitive: Copy + 'static {
-    fn zero() -> Self;
-}
+trait SpipPrimitive: Default + Copy + 'static {}
 
-impl SpipPrimitive for u8 {
-    fn zero() -> Self {
-        0
-    }
-}
+impl SpipPrimitive for u8 {}
+impl SpipPrimitive for u16 {}
 
-impl SpipPrimitive for u16 {
-    fn zero() -> Self {
-        0
-    }
-}
-
+#[allow(private_bounds)]
 impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
     fn init(config: Config, mod_: bool) {
-        // Note(cs): other peripherals might also be modifying devalt0 at the same time.
+        // Note(cs): other peripherals might also be modifying swsrst* and devalt0 at the same time.
         critical_section::with(|_| {
             let sysconfig = unsafe { crate::pac::Sysconfig::steal() };
 
@@ -95,15 +85,16 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
             sysconfig.pupd_en1().modify(|_, w| w.spip_pd_en().clear_bit());
         });
 
-        T::regs().spip_ctl1().modify(|_, w| {
+        let r = T::regs();
+        r.spip_ctl1().modify(|_, w| {
             w.mod_().bit(mod_);
             w.scidl().bit(config.mode.polarity == Polarity::IdleHigh);
             w.scm().bit(config.mode.phase == Phase::CaptureOnSecondTransition);
-            unsafe { w.scdv6_0().bits(0b0) }; // TODO clocking freq
+            unsafe { w.scdv6_0().bits(0x20) }; // TODO clocking freq
             w
         });
 
-        T::regs().spip_ctl1().modify(|_, w| w.spien().set_bit());
+        r.spip_ctl1().modify(|_, w| w.spien().set_bit());
     }
 
     async fn transfer_word(&mut self, data: U) -> U {
@@ -112,7 +103,7 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
         let stat = r.spip_stat().read();
         assert!(stat.bsy().bit_is_clear() && stat.rbf().bit_is_clear());
 
-        r.spip_ctl1().modify(|_, w| w.eiw().set_bit().eir().set_bit());
+        r.spip_ctl1().modify(|_, w| w.eir().set_bit());
 
         let ptr = r.spip_data().as_ptr();
         // The manual states that the read from the register must correspond with the size as
@@ -193,7 +184,7 @@ impl<T: Instance, U> embedded_hal_async::spi::ErrorType for Spip<'_, T, U> {
 impl<T: Instance, U: SpipPrimitive> embedded_hal_async::spi::SpiBus<U> for Spip<'_, T, U> {
     async fn read(&mut self, words: &mut [U]) -> Result<(), Self::Error> {
         for r in words {
-            *r = self.transfer_word(U::zero()).await;
+            *r = self.transfer_word(U::default()).await;
         }
         Ok(())
     }
@@ -227,15 +218,6 @@ impl<T: Instance, U: SpipPrimitive> embedded_hal_async::spi::SpiBus<U> for Spip<
 #[pac::interrupt]
 fn SPIP() {
     let spip = unsafe { pac::Spip::steal() };
-    let stat = spip.spip_stat().read();
-
-    // TODO probably not necessary.
-    if stat.bsy().bit_is_clear() && spip.spip_ctl1().read().eiw().bit_is_set() {
-        spip.spip_ctl1().modify(|_, w| w.eiw().clear_bit());
-    }
-
-    if stat.rbf().bit_is_set() {
-        spip.spip_ctl1().modify(|_, w| w.eir().clear_bit());
-        WAKER.wake();
-    }
+    spip.spip_ctl1().modify(|_, w| w.eir().clear_bit());
+    WAKER.wake();
 }

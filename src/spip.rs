@@ -1,7 +1,4 @@
-use crate::{
-    pac::{self, interrupt},
-    peripherals::SPIP,
-};
+use crate::{pac, peripherals::SPIP};
 use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
@@ -10,8 +7,6 @@ use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
 pub type MosiPin = crate::peripherals::PK12;
 pub type MisoPin = crate::peripherals::PM12;
 pub type SclkPin = crate::peripherals::PL12;
-
-static WAKER: AtomicWaker = AtomicWaker::new();
 
 /// SPIP configuration.
 #[non_exhaustive]
@@ -35,14 +30,19 @@ impl Default for Config {
 
 #[allow(private_bounds)]
 mod sealed {
-    pub trait SealedInstance {
-        fn regs() -> &'static crate::pac::spip::RegisterBlock;
-    }
+    pub trait SealedInstance {}
 }
 
-pub trait Instance: Peripheral<P = Self> + sealed::SealedInstance + 'static + Send {}
+pub trait Instance: Peripheral<P = Self> + sealed::SealedInstance + 'static + Send {
+    type Interrupt: crate::interrupt::typelevel::Interrupt;
+    fn waker() -> &'static AtomicWaker;
+    fn regs() -> &'static crate::pac::spip::RegisterBlock;
+}
 
-impl sealed::SealedInstance for SPIP {
+impl sealed::SealedInstance for SPIP {}
+impl Instance for SPIP {
+    type Interrupt = crate::interrupt::typelevel::SPIP;
+
     fn regs() -> &'static pac::spip::RegisterBlock {
         let ptr = crate::pac::Spip::ptr();
 
@@ -51,8 +51,23 @@ impl sealed::SealedInstance for SPIP {
         // and the created reference is shared.
         unsafe { &*ptr }
     }
+
+    fn waker() -> &'static AtomicWaker {
+        static WAKER: AtomicWaker = AtomicWaker::new();
+        &WAKER
+    }
 }
-impl Instance for SPIP {}
+
+pub struct InterruptHandler<T> {
+    _phantom: PhantomData<T>,
+}
+
+impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for InterruptHandler<T> {
+    unsafe fn on_interrupt() {
+        T::regs().spip_ctl1().modify(|_, w| w.eir().clear_bit());
+        T::waker().wake();
+    }
+}
 
 /// Driver for the SPI (Master) Peripheral.
 pub struct Spip<'d, T: Instance, U = u8> {
@@ -114,7 +129,7 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
         unsafe { ptr.write_volatile(data) };
 
         poll_fn(move |cx| {
-            WAKER.register(cx.waker());
+            T::waker().register(cx.waker());
             if r.spip_stat().read().rbf().bit_is_set() {
                 // Reading the data clears the rbf-bit.
                 let data = unsafe { ptr.read_volatile() };
@@ -213,11 +228,4 @@ impl<T: Instance, U: SpipPrimitive> embedded_hal_async::spi::SpiBus<U> for Spip<
     async fn flush(&mut self) -> Result<(), Self::Error> {
         Ok(()) // No-op
     }
-}
-
-#[pac::interrupt]
-fn SPIP() {
-    let spip = unsafe { pac::Spip::steal() };
-    spip.spip_ctl1().modify(|_, w| w.eir().clear_bit());
-    WAKER.wake();
 }

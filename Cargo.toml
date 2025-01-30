@@ -27,4 +27,5 @@ critical-section = "1.1"
 defmt = { version = "0.3", optional = true }
 embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
+embedded-io-async = "0.6"
 paste = "1.0"

@@ -1,11 +1,14 @@
+#![allow(private_interfaces)]
+
 //! Core Universal Asynchronous Receiver-Transmitter (CR_UART).
 //!
 //! Implements the full-duplex receiver transmitter integration with 16-byte FIFO buffers for receive and transmit.
 //! Does not (yet) support DMA transactions.
 
 use crate::interrupt::typelevel::Interrupt;
-use core::future::Future;
 use core::marker::PhantomData;
+use core::sync::atomic::{AtomicU8, Ordering};
+use core::{future::Future, sync::atomic::AtomicBool};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 
@@ -42,7 +45,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            baudrate: 9_600,
+            baudrate: 115_200,
             stop_bits: StopBits::STOP1,
             parity: None,
             input_inverted: false,
@@ -69,9 +72,18 @@ impl Default for CommonModeConfig {
     }
 }
 
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+pub enum Error {
+    Break,
+    DataOverrun,
+    Framing,
+    Parity,
+}
+
 struct AnyUart {
     regs: &'static crate::pac::cr_uart1::RegisterBlock,
     waker: &'static AtomicWaker,
+    state: &'static State,
 }
 
 impl<T: Instance> From<T> for AnyUart {
@@ -79,6 +91,7 @@ impl<T: Instance> From<T> for AnyUart {
         AnyUart {
             regs: T::regs(),
             waker: T::waker(),
+            state: T::state(),
         }
     }
 }
@@ -91,13 +104,15 @@ impl Peripheral for AnyUart {
         AnyUart {
             regs: self.regs,
             waker: self.waker,
+            state: self.state,
         }
     }
 }
 
 /// Core Universal Asynchronous Receiver-Transmitter (CR_UART) driver.
 pub struct Uart<'a> {
-    dev: PeripheralRef<'a, AnyUart>,
+    rx: UartRx<'a>,
+    tx: UartTx<'a>,
 }
 
 /// Potential UART clock configuration.
@@ -146,13 +161,14 @@ impl ClockConfiguration {
 }
 
 impl<'a> Uart<'a> {
-    fn regs(&self) -> &'static crate::pac::cr_uart1::RegisterBlock {
-        self.dev.regs
-    }
-
     /// Configure the base registers for the peripheral and enables it.
-    fn configure_enable(&mut self, config: Config) {
-        let r = self.regs();
+    fn configure_enable<T: Instance + 'a>(_peri: &(impl Peripheral<P = T> + 'a), config: Config) {
+        // Safety: _irqs ensures an interrupt handler is bound
+        unsafe {
+            T::Interrupt::enable();
+        }
+
+        let r = T::regs();
 
         r.ucntln().modify(|_, w| {
             w.cr_sin_inv()
@@ -175,6 +191,9 @@ impl<'a> Uart<'a> {
             w.stp().bit(config.stop_bits == StopBits::STOP2)
         });
 
+        // Enable receive error interrupts.
+        r.ufrctln().modify(|_, w| w.err_en().set_bit());
+
         // Safety: UART can only be initialized after the clocks have been initialized.
         let srcclk = unsafe { crate::cdcg::get_clocks() }.apb4_clk;
 
@@ -183,11 +202,9 @@ impl<'a> Uart<'a> {
             .min_by_key(move |cfg| cfg.baudrate(srcclk).abs_diff(config.baudrate))
             .expect("Failed to find clock configuration for requested baudrate");
 
-        self.regs()
-            .ubaudn()
-            .write(|w| unsafe { w.bits((clkcfg.udiv10() & 0xff) as u8) });
+        r.ubaudn().write(|w| unsafe { w.bits((clkcfg.udiv10() & 0xff) as u8) });
         // Setting the prescaler to non-zero also enables the peripheral.
-        self.regs().upsrn().write(|w| unsafe {
+        r.upsrn().write(|w| unsafe {
             w.upsc()
                 .bits(clkcfg.upsc())
                 .udiv10_8()
@@ -196,9 +213,20 @@ impl<'a> Uart<'a> {
     }
 
     /// Configure the base registers and general common mode registers for the peripheral, and enables it.
-    fn configure_common_mode_enable(&mut self, config: CommonModeConfig) {
-        self.regs().ucntln().modify(|_, w| w.com_fdbk_en().bit(config.feedback));
-        self.configure_enable(config.base);
+    fn configure_common_mode_enable<T: Instance + 'a>(peri: &(impl Peripheral<P = T> + 'a), config: CommonModeConfig) {
+        T::regs().ucntln().modify(|_, w| w.com_fdbk_en().bit(config.feedback));
+        Self::configure_enable(peri, config.base);
+    }
+
+    fn instantiate_rx_tx<T: Instance + 'a>(peri: impl Peripheral<P = T> + 'a) -> Self {
+        into_ref!(peri);
+        let peri: PeripheralRef<'_, AnyUart> = peri.map_into();
+
+        // Safety: we ensure that UartRx and UartTx can work at the same time.
+        Self {
+            rx: UartRx::<'a>::new(unsafe { peri.clone_unchecked() }),
+            tx: UartTx::<'a>::new(peri),
+        }
     }
 
     /// Enables the peripheral in "Separate Mode" with applicable input and output pins.
@@ -219,16 +247,52 @@ impl<'a> Uart<'a> {
             };
         });
 
-        // Safety: _irqs ensures an interrupt handler is bound
-        unsafe {
-            T::Interrupt::enable();
-        }
+        Self::configure_enable(&peri, config);
+        Self::instantiate_rx_tx(peri)
+    }
+
+    /// Enables the peripheral in "Separate Mode" with applicable input pin.
+    pub fn new_rx<T: Instance + 'a, Sin: InputPin>(
+        peri: impl Peripheral<P = T> + 'a,
+        _sin: impl Peripheral<P = Sin> + 'a,
+        _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
+        config: Config,
+    ) -> UartRx<'a> {
+        // Note(cs): other peripherals might also be modifying swsrst* at the same time.
+        critical_section::with(|cs| {
+            // Safety: We have exclusive ownership over the peripherals.
+            unsafe {
+                T::reset(cs);
+                Sin::setup(cs)
+            };
+        });
+
+        Self::configure_enable(&peri, config);
 
         into_ref!(peri);
+        UartRx::new(peri.map_into())
+    }
 
-        let mut dev = Self { dev: peri.map_into() };
-        dev.configure_enable(config);
-        dev
+    /// Enables the peripheral in "Separate Mode" with applicable output pin.
+    pub fn new_tx<T: Instance + 'a, Sout: OutputPin>(
+        peri: impl Peripheral<P = T> + 'a,
+        _sout: impl Peripheral<P = Sout> + 'a,
+        _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
+        config: Config,
+    ) -> UartTx<'a> {
+        // Note(cs): other peripherals might also be modifying swsrst* at the same time.
+        critical_section::with(|cs| {
+            // Safety: We have exclusive ownership over the peripherals.
+            unsafe {
+                T::reset(cs);
+                Sout::setup(cs)
+            };
+        });
+
+        Self::configure_enable(&peri, config);
+
+        into_ref!(peri);
+        UartTx::new(peri.map_into())
     }
 
     /// Enables the peripheral in "Common Mode" by using an applicable input pin as both input and output.
@@ -247,14 +311,11 @@ impl<'a> Uart<'a> {
             };
         });
 
-        into_ref!(peri);
-
-        let mut dev = Self { dev: peri.map_into() };
-        dev.regs()
+        T::regs()
             .ucntln()
             .modify(|_, w| w.cr_sin_com().set_bit().cr_sin_pp().bit(config.push_pull));
-        dev.configure_common_mode_enable(config);
-        dev
+        Self::configure_common_mode_enable(&peri, config);
+        Self::instantiate_rx_tx(peri)
     }
 
     /// Enables the peripheral in "Common Mode" by using an applicable output pin as both input and output.
@@ -273,21 +334,59 @@ impl<'a> Uart<'a> {
             };
         });
 
-        into_ref!(peri);
-
-        let mut dev = Self { dev: peri.map_into() };
-        dev.regs()
+        T::regs()
             .ucntln()
             .modify(|_, w| w.cr_sout_com().set_bit().cr_sout_pp().bit(config.push_pull));
-        dev.configure_common_mode_enable(config);
-        dev
+
+        Self::configure_common_mode_enable(&peri, config);
+        Self::instantiate_rx_tx(peri)
+    }
+
+    pub fn split(self) -> (UartRx<'a>, UartTx<'a>) {
+        (self.rx, self.tx)
     }
 }
 
-impl<'a> Drop for Uart<'a> {
-    fn drop(&mut self) {
+pub struct UartRx<'a> {
+    dev: PeripheralRef<'a, AnyUart>,
+}
+
+pub struct UartTx<'a> {
+    dev: PeripheralRef<'a, AnyUart>,
+}
+
+impl<'a> UartRx<'a> {
+    fn new(dev: PeripheralRef<'a, AnyUart>) -> Self {
+        dev.state.rx_tx_refcount.fetch_add(1, Ordering::AcqRel);
+        Self { dev }
+    }
+}
+
+fn drop_rx_tx<'a>(dev: &PeripheralRef<'a, AnyUart>) {
+    if dev.state.rx_tx_refcount.fetch_sub(1, Ordering::AcqRel) == 1 {
+        // We need to clean up.
+
         // Setting the prescaler to 0 disables the clock and disables the peripheral.
-        self.regs().upsrn().write(|w| unsafe { w.upsc().bits(0b0_0000) });
+        dev.regs.upsrn().write(|w| unsafe { w.upsc().bits(0b0_0000) });
+    }
+}
+
+impl<'a> Drop for UartRx<'a> {
+    fn drop(&mut self) {
+        drop_rx_tx(&self.dev);
+    }
+}
+
+impl<'a> UartTx<'a> {
+    fn new(dev: PeripheralRef<'a, AnyUart>) -> Self {
+        dev.state.rx_tx_refcount.fetch_add(1, Ordering::AcqRel);
+        Self { dev }
+    }
+}
+
+impl<'a> Drop for UartTx<'a> {
+    fn drop(&mut self) {
+        drop_rx_tx(&self.dev);
     }
 }
 
@@ -304,12 +403,57 @@ impl<T: Instance> crate::interrupt::typelevel::Handler<T::Interrupt> for Interru
     }
 }
 
+impl embedded_io_async::Error for Error {
+    fn kind(&self) -> embedded_io_async::ErrorKind {
+        use embedded_io_async::ErrorKind;
+        match self {
+            Error::Break => ErrorKind::InvalidData,
+            Error::DataOverrun => ErrorKind::OutOfMemory,
+            Error::Framing => ErrorKind::InvalidData,
+            Error::Parity => ErrorKind::InvalidData,
+        }
+    }
+}
+
+impl<'a> embedded_io_async::ErrorType for UartRx<'a> {
+    type Error = Error;
+}
+
+impl<'a> embedded_io_async::ErrorType for UartTx<'a> {
+    type Error = Error;
+}
+
+impl<'a> embedded_io_async::Read for UartRx<'a> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        todo!()
+    }
+}
+
+impl<'a> embedded_io_async::Write for UartTx<'a> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        todo!()
+    }
+}
+
+struct State {
+    rx_tx_refcount: AtomicU8,
+}
+
+impl State {
+    const fn new() -> Self {
+        Self {
+            rx_tx_refcount: AtomicU8::new(0),
+        }
+    }
+}
+
 mod sealed {
     use embassy_sync::waitqueue::AtomicWaker;
 
     pub trait SealedInstance {
         fn waker() -> &'static AtomicWaker;
         fn regs() -> &'static crate::pac::cr_uart1::RegisterBlock;
+        fn state() -> &'static crate::uart::State;
 
         unsafe fn reset(cs: critical_section::CriticalSection);
     }
@@ -339,6 +483,11 @@ macro_rules! impl_instance {
             fn waker() -> &'static AtomicWaker {
                 static WAKER: AtomicWaker = AtomicWaker::new();
                 &WAKER
+            }
+
+            fn state() -> &'static State {
+                static STATE: State = State::new();
+                &STATE
             }
 
             fn regs() -> &'static crate::pac::cr_uart1::RegisterBlock {

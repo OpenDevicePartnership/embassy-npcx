@@ -1,3 +1,8 @@
+//! Core Universal Asynchronous Receiver-Transmitter (CR_UART).
+//!
+//! Implements the full-duplex receiver transmitter integration with 16-byte FIFO buffers for receive and transmit.
+//! Does not (yet) support DMA transactions.
+
 use crate::interrupt::typelevel::Interrupt;
 use core::future::Future;
 use core::marker::PhantomData;
@@ -90,6 +95,7 @@ impl Peripheral for AnyUart {
     }
 }
 
+/// Core Universal Asynchronous Receiver-Transmitter (CR_UART) driver.
 pub struct Uart<'a> {
     dev: PeripheralRef<'a, AnyUart>,
 }
@@ -195,6 +201,7 @@ impl<'a> Uart<'a> {
         self.configure_enable(config.base);
     }
 
+    /// Enables the peripheral in "Separate Mode" with applicable input and output pins.
     pub fn new<T: Instance + 'a, Sin: InputPin, Sout: OutputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sin: impl Peripheral<P = Sin> + 'a,
@@ -224,6 +231,7 @@ impl<'a> Uart<'a> {
         dev
     }
 
+    /// Enables the peripheral in "Common Mode" by using an applicable input pin as both input and output.
     pub fn new_common_input<T: Instance + 'a, Sin: InputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sin: impl Peripheral<P = Sin> + 'a,
@@ -249,6 +257,7 @@ impl<'a> Uart<'a> {
         dev
     }
 
+    /// Enables the peripheral in "Common Mode" by using an applicable output pin as both input and output.
     pub fn new_common_output<T: Instance + 'a, Sout: OutputPin>(
         peri: impl Peripheral<P = T> + 'a,
         _sout: impl Peripheral<P = Sout> + 'a,

@@ -1,11 +1,10 @@
 #![no_main]
 #![no_std]
 
-use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_npcx::{bind_interrupts, i2c, peripherals, Config};
 use embedded_hal::i2c::Operation;
-use panic_probe as _;
+use {defmt_rtt as _, panic_probe as _};
 
 bind_interrupts!(pub struct Irqs {
     SMB5 => embassy_npcx::i2c::InterruptHandler<peripherals::SMB5>;

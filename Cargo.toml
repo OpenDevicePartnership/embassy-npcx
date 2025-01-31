@@ -12,7 +12,7 @@ repository = "https://github.com/OpenDevicePartnership/embassy-npcx"
 rust-version = "1.80.0"
 
 [features]
-default = ["rt"]
+default = ["rt", "defmt"]
 defmt = ["dep:defmt"]
 rt = ["npcx490m-pac/rt", "dep:cortex-m-rt"]
 
@@ -20,6 +20,7 @@ rt = ["npcx490m-pac/rt", "dep:cortex-m-rt"]
 npcx490m-pac = { git = "https://github.com/OpenDevicePartnership/npcx490m-pac", features = ["rt", "critical-section"] }
 embassy-hal-internal = { git = "https://github.com/embassy-rs/embassy", features = ["cortex-m", "prio-bits-0"] }
 embassy-sync = { git = "https://github.com/embassy-rs/embassy" }
+embassy-futures = { git = "https://github.com/embassy-rs/embassy" }
 cortex-m-rt = { version = ">=0.6.15,<0.8", optional = true }
 cortex-m = "0.7.7"
 

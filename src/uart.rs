@@ -6,9 +6,30 @@ use embassy_sync::waitqueue::AtomicWaker;
 
 #[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
 #[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum StopBits {
+    STOP1,
+    STOP2,
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
+pub enum Parity {
+    ParityOdd = 0b00,
+    ParityEven = 0b01,
+    ParityMark = 0b10,
+    ParitySpace = 0b11,
+}
+
+/// Base configuration for the Core Uart peripheral.
+///
+/// Applicable for both the "Separate Mode" and the "Common Mode".
+#[derive(Debug, Copy, Clone, Eq, PartialEq, Hash)]
+#[cfg_attr(feature = "defmt", derive(defmt::Format))]
 #[non_exhaustive]
 pub struct Config {
-    pub frequency: u32,
+    pub baudrate: u32,
+    pub stop_bits: StopBits,
+    pub parity: Option<Parity>,
     pub input_inverted: bool,
     pub output_inverted: bool,
 }
@@ -16,26 +37,29 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Self {
         Self {
-            frequency: 9_600,
+            baudrate: 9_600,
+            stop_bits: StopBits::STOP1,
+            parity: None,
             input_inverted: false,
             output_inverted: false,
         }
     }
 }
 
+/// "Common Mode" configuration for the Core Uart peripheral.
 #[non_exhaustive]
-pub struct CommonConfig {
+pub struct CommonModeConfig {
     pub base: Config,
-    pub input_push_pull: bool,
-    pub output_push_pull: bool,
+    pub push_pull: bool,
+    pub feedback: bool,
 }
 
-impl Default for CommonConfig {
+impl Default for CommonModeConfig {
     fn default() -> Self {
         Self {
             base: Config::default(),
-            input_push_pull: false,
-            output_push_pull: false,
+            push_pull: false,
+            feedback: false,
         }
     }
 }
@@ -70,15 +94,111 @@ pub struct Uart<'a> {
     dev: PeripheralRef<'a, AnyUart>,
 }
 
+/// Potential UART clock configuration.
+///
+/// The baudrate is computed as follows:
+/// ```"not rust"
+/// BR = SRC / (16 x div x p)
+/// (div x p) = SRC / (16 * BR)
+/// ```
+struct ClockConfiguration {
+    // Divisor value
+    div: u16,
+    // Prescaler value times two
+    p2: u8,
+}
+
+impl ClockConfiguration {
+    pub fn generate_valid(srcclk: u32, desired_baudrate: u32) -> impl Iterator<Item = Self> {
+        let dstclk2 = (srcclk * 2) / 16 / desired_baudrate;
+
+        (2..=32).filter_map(move |p2| {
+            let div = dstclk2 / p2 as u32;
+            if div > 0 && div <= 0x800 {
+                Some(ClockConfiguration { div: div as u16, p2 })
+            } else {
+                None
+            }
+        })
+    }
+
+    // Compute the UDIV10_0 register field value.
+    pub fn udiv10(&self) -> u16 {
+        self.div - 1
+    }
+
+    /// Compute UPSC register field value.
+    pub fn upsc(&self) -> u8 {
+        self.p2 - 1 // 1,1.5,2..=16 => 1..=31
+    }
+
+    // Compute the effective baudrate given a source clock.
+    pub fn baudrate(&self, srcclk: u32) -> u32 {
+        // BR = SRC / (16 x div x p)
+        srcclk / ((16 * self.div as u32 * self.p2 as u32) / 2)
+    }
+}
+
 impl<'a> Uart<'a> {
     fn regs(&self) -> &'static crate::pac::cr_uart1::RegisterBlock {
         self.dev.regs
     }
 
+    /// Configure the base registers for the peripheral and enables it.
+    fn configure_enable(&mut self, config: Config) {
+        let r = self.regs();
+
+        r.ucntln().modify(|_, w| {
+            w.cr_sin_inv()
+                .bit(config.input_inverted)
+                .cr_sout_inv()
+                .bit(config.output_inverted)
+        });
+
+        r.ufrsn().write(|w| {
+            match config.parity {
+                Some(parity) => {
+                    w.pen().set_bit();
+                    unsafe { w.psel().bits(parity as u8) };
+                }
+                None => {
+                    w.pen().clear_bit();
+                }
+            };
+
+            w.stp().bit(config.stop_bits == StopBits::STOP2)
+        });
+
+        // Safety: UART can only be initialized after the clocks have been initialized.
+        let srcclk = unsafe { crate::cdcg::get_clocks() }.apb4_clk;
+
+        let clkcfg = ClockConfiguration::generate_valid(srcclk, config.baudrate)
+            // Minimize baudrate error.
+            .min_by_key(move |cfg| cfg.baudrate(srcclk).abs_diff(config.baudrate))
+            .expect("Failed to find clock configuration for requested baudrate");
+
+        self.regs()
+            .ubaudn()
+            .write(|w| unsafe { w.bits((clkcfg.udiv10() & 0xff) as u8) });
+        // Setting the prescaler to non-zero also enables the peripheral.
+        self.regs().upsrn().write(|w| unsafe {
+            w.upsc()
+                .bits(clkcfg.upsc())
+                .udiv10_8()
+                .bits(((clkcfg.udiv10() & 0x700) >> 8) as u8)
+        });
+    }
+
+    /// Configure the base registers and general common mode registers for the peripheral, and enables it.
+    fn configure_common_mode_enable(&mut self, config: CommonModeConfig) {
+        self.regs().ucntln().modify(|_, w| w.com_fdbk_en().bit(config.feedback));
+        self.configure_enable(config.base);
+    }
+
     pub fn new<T: Instance + 'a, Sin: InputPin, Sout: OutputPin>(
         peri: impl Peripheral<P = T> + 'a,
-        sin: impl Peripheral<P = Sin> + 'a,
-        sout: impl Peripheral<P = Sout> + 'a,
+        _sin: impl Peripheral<P = Sin> + 'a,
+        _sout: impl Peripheral<P = Sout> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
@@ -92,9 +212,6 @@ impl<'a> Uart<'a> {
             };
         });
 
-        // We take ownership over the pins, but do nothing with them after this.
-        let (_, _) = (sin, sout);
-
         // Safety: _irqs ensures an interrupt handler is bound
         unsafe {
             T::Interrupt::enable();
@@ -103,26 +220,65 @@ impl<'a> Uart<'a> {
         into_ref!(peri);
 
         let mut dev = Self { dev: peri.map_into() };
-
-        todo!();
+        dev.configure_enable(config);
+        dev
     }
 
     pub fn new_common_input<T: Instance + 'a, Sin: InputPin>(
         peri: impl Peripheral<P = T> + 'a,
-        sin: impl Peripheral<P = Sin> + 'a,
+        _sin: impl Peripheral<P = Sin> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
-        config: Config,
+        config: CommonModeConfig,
     ) -> Self {
-        todo!()
+        // Note(cs): other peripherals might also be modifying swsrst* at the same time.
+        critical_section::with(|cs| {
+            // Safety: We have exclusive ownership over the peripherals.
+            unsafe {
+                T::reset(cs);
+                Sin::setup(cs)
+            };
+        });
+
+        into_ref!(peri);
+
+        let mut dev = Self { dev: peri.map_into() };
+        dev.regs()
+            .ucntln()
+            .modify(|_, w| w.cr_sin_com().set_bit().cr_sin_pp().bit(config.push_pull));
+        dev.configure_common_mode_enable(config);
+        dev
     }
 
     pub fn new_common_output<T: Instance + 'a, Sout: OutputPin>(
         peri: impl Peripheral<P = T> + 'a,
-        sout: impl Peripheral<P = Sout> + 'a,
+        _sout: impl Peripheral<P = Sout> + 'a,
         _irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
-        config: Config,
+        config: CommonModeConfig,
     ) -> Self {
-        todo!()
+        // Note(cs): other peripherals might also be modifying swsrst* at the same time.
+        critical_section::with(|cs| {
+            // Safety: We have exclusive ownership over the peripherals.
+            unsafe {
+                T::reset(cs);
+                Sout::setup(cs)
+            };
+        });
+
+        into_ref!(peri);
+
+        let mut dev = Self { dev: peri.map_into() };
+        dev.regs()
+            .ucntln()
+            .modify(|_, w| w.cr_sout_com().set_bit().cr_sout_pp().bit(config.push_pull));
+        dev.configure_common_mode_enable(config);
+        dev
+    }
+}
+
+impl<'a> Drop for Uart<'a> {
+    fn drop(&mut self) {
+        // Setting the prescaler to 0 disables the clock and disables the peripheral.
+        self.regs().upsrn().write(|w| unsafe { w.upsc().bits(0b0_0000) });
     }
 }
 

@@ -1,3 +1,7 @@
+//! Serial Peripheral Interface Peripheral (SPIP).
+//!
+//! Implements the general purpose SPI Peripheral Interface that enables the connection of SPI-based peripheral devices.
+
 use crate::{cdcg, interrupt::typelevel::Interrupt, pac, peripherals::SPIP};
 use core::{convert::Infallible, future::poll_fn, marker::PhantomData, task::Poll};
 use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};

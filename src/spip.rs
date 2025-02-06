@@ -162,6 +162,15 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
         })
         .await
     }
+
+    /// Get the effective bus frequency.
+    pub fn frequency(&self) -> u32 {
+        // Note(safety): SPIP can only be constructed after clocks have been initialized.
+        let srcclk = unsafe { cdcg::get_clocks() }.apb2_clk;
+        let scdv6_0 = T::regs().spip_ctl1().read().scdv6_0().bits() as u32;
+        let div = (scdv6_0 + 1) * 2;
+        srcclk / div
+    }
 }
 
 impl<'d, T: Instance> Spip<'d, T, u8> {

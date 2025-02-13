@@ -8,7 +8,6 @@ use embassy_executor::Spawner;
 use embassy_npcx::{
     self as hal, bind_interrupts,
     gpio::{Level, OutputOnly, OutputOpenDrain},
-    interrupt::InterruptExt,
     peripherals::SPIP,
     spip::Spip,
     Config,
@@ -26,30 +25,22 @@ async fn main(_spawner: Spawner) {
     let config = Config::default();
     let (p, _) = embassy_npcx::init_espi(config);
 
-    let mut config: hal::spip::Config = Default::default();
-    // config.mode.polarity = embedded_hal_async::spi::Polarity::IdleHigh;
+    let config: hal::spip::Config = Default::default();
 
-    let spip = Spip::new_8bit(p.SPIP, p.PK12, p.PM12, p.PL12, Irqs, config);
+    let spip = Spip::new_8bit(p.SPIP, p.PK12, p.PM12, p.PL12, p.PL10, Irqs, config);
     let spip = Mutex::<NoopRawMutex, Spip<SPIP, u8>>::new(spip);
 
-    let cs0: OutputOpenDrain<'_, OutputOnly> = OutputOpenDrain::<'_, OutputOnly>::new(p.PL10, Level::High);
-    let cs1 = OutputOpenDrain::<'_, OutputOnly>::new(p.PK11, Level::High);
+    // Note: flash0 is unusable on the devboard.
 
-    let mut flash0 = MutexSpiDevice::new(&spip, cs0);
+    let cs1 = OutputOpenDrain::<'_, OutputOnly>::new(p.PK11, Level::High);
     let mut flash1 = MutexSpiDevice::new(&spip, cs1);
 
     use embedded_hal_async::spi::SpiDevice;
-
     loop {
         let mut buf = [0; 13];
         buf[0] = 0x4B;
-        flash0.transfer_in_place(&mut buf).await.unwrap();
-        defmt::info!("flash0 {:x}", buf);
+        flash1.transfer_in_place(&mut buf).await.unwrap();
+        defmt::info!("flash1 unique ID {:x}", buf[4..]);
         delay(5_000_000);
-
-        // let mut buf = [0x05, 0x00];
-        // flash1.transfer_in_place(&mut buf).await.unwrap();
-        // defmt::info!("flash1 {:x}", buf);
-        // delay(5_000_000);
     }
 }

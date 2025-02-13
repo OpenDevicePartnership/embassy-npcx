@@ -12,6 +12,9 @@ pub type MosiPin = crate::peripherals::PK12;
 pub type MisoPin = crate::peripherals::PM12;
 pub type SclkPin = crate::peripherals::PL12;
 
+/// Pin that has been tied to the SPIP IO matrix, and cannot be used as GPIO when SPIP is used.
+pub type LegacyPin = crate::peripherals::PL10;
+
 const MAX_FREQUENCY: u32 = 12_500_000;
 
 /// SPIP configuration.
@@ -183,13 +186,14 @@ impl<'d, T: Instance> Spip<'d, T, u8> {
         mosi: impl Peripheral<P = MosiPin> + 'd,
         miso: impl Peripheral<P = MisoPin> + 'd,
         sclk: impl Peripheral<P = SclkPin> + 'd,
+        legacy: impl Peripheral<P = LegacyPin> + 'd,
         irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
         into_ref!(peri);
 
         // We only tie the pins to our lifetime, discard.
-        let _ = (mosi, miso, sclk);
+        let _ = (mosi, miso, sclk, legacy);
 
         Self::init(irqs, config, false);
 
@@ -206,13 +210,14 @@ impl<'d, T: Instance> Spip<'d, T, u16> {
         mosi: impl Peripheral<P = MosiPin> + 'd,
         miso: impl Peripheral<P = MisoPin> + 'd,
         sclk: impl Peripheral<P = SclkPin> + 'd,
+        legacy: impl Peripheral<P = LegacyPin> + 'd,
         irqs: impl crate::interrupt::typelevel::Binding<T::Interrupt, InterruptHandler<T>>,
         config: Config,
     ) -> Self {
         into_ref!(peri);
 
         // We only tie the pins to our lifetime, discard.
-        let _ = (mosi, miso, sclk);
+        let _ = (mosi, miso, sclk, legacy);
 
         Self::init(irqs, config, true);
 

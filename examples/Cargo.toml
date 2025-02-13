@@ -3,6 +3,13 @@ name = "npcx490m-examples"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+_time = ["dep:embassy-time", "embassy-npcx/time-driver-mft16-3"]
+time_lfclk = ["_time", "embassy-time/tick-hz-32_768"]
+time_apb1 = ["_time", "embassy-time/tick-hz-1_048_576"]
+
+default = ["time_lfclk"]
+
 [dependencies]
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core", "inline-asm"] }
 cortex-m-rt = "0.7.3"
@@ -12,6 +19,7 @@ embassy-npcx = { path = "../", features = ["defmt"] }
 embassy-executor = { version = "0.7.0", features = ["task-arena-size-32768", "arch-cortex-m", "executor-thread", "defmt"] }
 embassy-sync = "0.6.2"
 embassy-futures = "0.1.1"
+embassy-time = { version = "0.4.0", optional = true }
 panic-probe = { version = "0.3.2", features = ["print-defmt"] }
 
 embedded-hal = "1.0"

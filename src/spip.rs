@@ -8,8 +8,11 @@ use embassy_hal_internal::{into_ref, Peripheral, PeripheralRef};
 use embassy_sync::waitqueue::AtomicWaker;
 use embedded_hal::spi::{Mode, Phase, Polarity, MODE_0};
 
+/// Pin that can be used as SPIP Mosi.
 pub type MosiPin = crate::peripherals::PK12;
+/// Pin that can be used as SPIP Miso.
 pub type MisoPin = crate::peripherals::PM12;
+/// Pin that can be used as SPIP Sclk.
 pub type SclkPin = crate::peripherals::PL12;
 
 /// Pin that has been tied to the SPIP IO matrix, and cannot be used as GPIO when SPIP is used.
@@ -44,9 +47,15 @@ mod sealed {
     pub trait SealedInstance {}
 }
 
+/// A marker trait implemented by the SPIP peripherals.
 pub trait Instance: Peripheral<P = Self> + sealed::SealedInstance + 'static + Send {
+    /// The interrupt used by this instance.
     type Interrupt: crate::interrupt::typelevel::Interrupt;
+
+    /// The waker used by this instance.
     fn waker() -> &'static AtomicWaker;
+
+    /// The register belonging to this instance.
     fn regs() -> &'static crate::pac::spip::RegisterBlock;
 }
 
@@ -69,6 +78,7 @@ impl Instance for SPIP {
     }
 }
 
+/// The interrupt handler for the SPIP driver.
 pub struct InterruptHandler<T> {
     _phantom: PhantomData<T>,
 }
@@ -181,6 +191,7 @@ impl<T: Instance, U: SpipPrimitive> Spip<'_, T, U> {
 }
 
 impl<'d, T: Instance> Spip<'d, T, u8> {
+    /// Enables the peripheral in 8-bit word mode with the applicable bus pins.
     pub fn new_8bit(
         peri: impl Peripheral<P = T> + 'd,
         mosi: impl Peripheral<P = MosiPin> + 'd,
@@ -205,6 +216,7 @@ impl<'d, T: Instance> Spip<'d, T, u8> {
 }
 
 impl<'d, T: Instance> Spip<'d, T, u16> {
+    /// Enables the peripheral in 16-bit word mode with the applicable bus pins.
     pub fn new_16bit(
         peri: impl Peripheral<P = T> + 'd,
         mosi: impl Peripheral<P = MosiPin> + 'd,

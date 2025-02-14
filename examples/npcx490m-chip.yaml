@@ -22,7 +22,7 @@ variants:
         name: BootROM
         range:
           start: 0x0
-          end: 0x2FFFF
+          end: 0x30000
         cores:
           - core1
       - !Ram
@@ -31,7 +31,7 @@ variants:
           # The start address of the memory (inclusive).
           start: 0x10060000
           # The end address of the memory (inclusive).
-          end: 0x100BFFFF
+          end: 0x100C0000
         # List of cores that can access this region
         cores:
           - core1
@@ -39,14 +39,14 @@ variants:
         name: DATA_RAM
         range:
           start: 0x200C0000
-          end: 0x200DC7FF
+          end: 0x200DC800
         cores:
           - core1
       - !Nvm
         name: Flash
         range:
           start: 0x60000000
-          end: 0x600FFFFF
+          end: 0x60100000
         cores:
           - core1
     flash_algorithms:

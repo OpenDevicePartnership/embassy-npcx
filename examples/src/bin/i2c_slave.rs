@@ -167,7 +167,7 @@ async fn main(spawner: Spawner) {
         },
     );
 
-    spawner.must_spawn(device(i2cdevice));
+    spawner.spawn(device(i2cdevice).unwrap());
     SIG.wait().await;
 
     let mut buf = [0; 8];

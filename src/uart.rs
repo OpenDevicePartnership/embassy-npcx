@@ -775,10 +775,16 @@ impl_pin_input!(CR_UART1, PC10, |config, _| {
 impl_pin_input!(CR_UART1, PG04, |config, _| {
     config.devaltj().modify(|_, w| w.cr_sin1_sl2().set_bit());
 });
+impl_pin_input!(CR_UART1, PH18, |config, _| {
+    config.devaltj().modify(|_, w| w.cr_sin1_sl2().set_bit());
+});
 impl_pin_output!(CR_UART1, PC09, |config, _| {
     config.devaltj().modify(|_, w| w.cr_sout1_sl1().set_bit());
 });
 impl_pin_output!(CR_UART1, PH04, |config, _| {
+    config.devaltj().modify(|_, w| w.cr_sout1_sl2().set_bit());
+});
+impl_pin_output!(CR_UART1, PE19, |config, _| {
     config.devaltj().modify(|_, w| w.cr_sout1_sl2().set_bit());
 });
 

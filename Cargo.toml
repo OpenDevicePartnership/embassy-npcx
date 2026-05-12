@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = [ "embedded", "async", "npcx490m", "nuvoton", "embedded-hal" ]
 categories = [ "embedded", "hardware-support", "no-std", "asynchronous" ]
 repository = "https://github.com/OpenDevicePartnership/embassy-npcx"
-rust-version = "1.85.0"
+rust-version = "1.87.0"
 
 [features]
 default = ["rt"]
@@ -44,7 +44,7 @@ critical-section = "1.1"
 defmt = { version = "1.0", optional = true }
 embedded-hal = "1.0.0"
 embedded-hal-async = "1.0.0"
-embedded-io-async = "0.6"
+embedded-io-async = "0.7"
 paste = "1.0"
 cfg-if = "1.0"
 maitake-sync = { version = "0.2.0", default-features = false, features = ["critical-section"] }

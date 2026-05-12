@@ -98,6 +98,18 @@ pub enum Error {
     Parity,
 }
 
+impl core::fmt::Display for Error {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Error::Break => write!(f, "Line break detected"),
+            Error::DataOverrun => write!(f, "Data overrun"),
+            Error::Framing => write!(f, "Framing error"),
+            Error::Parity => write!(f, "Parity error"),
+        }
+    }
+}
+impl core::error::Error for Error {}
+
 struct AnyUart {
     regs: &'static crate::pac::cr_uart1::RegisterBlock,
     rx_waker: &'static AtomicWaker,
@@ -588,6 +600,42 @@ impl embedded_io_async::Write for UartTx<'_> {
 impl embedded_io_async::WriteReady for UartTx<'_> {
     fn write_ready(&mut self) -> Result<bool, Self::Error> {
         Ok(self.dev.regs.uftstsn().read().tempty_level().bits() != 0)
+    }
+}
+
+impl<T: Instance> embedded_io_async::ErrorType for Uart<'_, T> {
+    type Error = Error;
+}
+
+impl<T: Instance> embedded_io_async::Read for Uart<'_, T> {
+    async fn read(&mut self, buf: &mut [u8]) -> Result<usize, Self::Error> {
+        self.rx.read(buf).await
+    }
+}
+
+impl<T: Instance> embedded_io_async::ReadReady for Uart<'_, T> {
+    fn read_ready(&mut self) -> Result<bool, Self::Error> {
+        self.rx.read_ready()
+    }
+}
+
+impl<T: Instance> embedded_io_async::Write for Uart<'_, T> {
+    async fn write(&mut self, buf: &[u8]) -> Result<usize, Self::Error> {
+        // Panic safety: TX operations are infallible so it is safe to unwrap
+        Ok(self.tx.write(buf).await.unwrap())
+    }
+
+    async fn flush(&mut self) -> Result<(), Self::Error> {
+        // Panic safety: TX operations are infallible so it is safe to unwrap
+        self.tx.flush().await.unwrap();
+        Ok(())
+    }
+}
+
+impl<T: Instance> embedded_io_async::WriteReady for Uart<'_, T> {
+    fn write_ready(&mut self) -> Result<bool, Self::Error> {
+        // Panic safety: TX operations are infallible so it is safe to unwrap
+        Ok(self.tx.write_ready().unwrap())
     }
 }
 

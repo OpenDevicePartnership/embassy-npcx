@@ -26,7 +26,7 @@ async fn main(spawner: Spawner) {
 
     let (rx, mut tx) = uart.split();
 
-    spawner.spawn(reader(rx)).unwrap();
+    spawner.spawn(reader(rx).unwrap());
 
     let buf = "Hello NPCX! Greetings from the Open Device Partnership!\r\n".as_bytes();
     loop {

@@ -1,0 +1,86 @@
+
+# cargo-vet audits file
+
+[[audits.autocfg]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "1.5.0 -> 1.5.1"
+notes = "Delta 1.5.0->1.5.1: test-only refactor replacing shell wrapper script with self-contained Rust test binary. No library code changes, no unsafe, no build script. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.cc]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "1.2.45 -> 1.2.63"
+notes = "Delta 1.2.45->1.2.63: env var handling refactor, deterministic archives, deadlock fixes, new targets (HelenOS/relibc/RISC-V/VS2026), clang-cl cross-compile fix. No unsafe code. All changes consistent with build-tool purpose. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.generator]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.8 -> 0.8.9"
+notes = "Delta: adds aarch64 Windows platform support and tvOS/watchOS cfg. New unsafe in context_init and assembly follows existing x86_64 Windows patterns. No new dependencies or capabilities. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.log]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.4.29 -> 0.4.32"
+notes = "Delta 0.4.29->0.4.32: No new unsafe. Key type now distinguishes static vs borrowed strings; added Display-based ToValue for std::net types (no I/O); MSRV bump to 1.71; typo fixes. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.loom]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.7.2"
+notes = "Concurrency permutation testing tool. ~23 unsafe blocks for lifetime extensions, waker vtable, Arc/UnsafeCell ops - all sound. No build script. std::env for LOOM_* config; std::fs only behind checkpoint feature. No network or process spawning. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.memchr]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "2.7.6 -> 2.8.1"
+notes = "Delta 2.7.6->2.8.1: clippy cleanups, owned finder builder APIs (alloc-gated), big-endian aarch64 NEON movemask. New unsafe movemask variant is sound. No new dependencies or ambient capabilities. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.paste]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "1.0.15"
+notes = "Proc-macro crate for identifier pasting. No unsafe code. Build script only detects rustc version. std::env::var used only for env!() segment feature. All generated code is safe identifiers/literals via proc_macro API. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.regex-syntax]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.8.10 -> 0.8.11"
+notes = "Delta: single optimization to IntervalSet::push() using binary search + incremental merge. No unsafe, no build script, no proc macros. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.scoped-tls]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "1.0.1"
+notes = "Tiny single-file crate, no deps, no build script. Two unsafe sites: unsafe impl Sync for static key (sound - TLS is per-thread) and pointer cast in with() (sound - lifetime scoped by set() closure with drop guard). No fs/net/process access. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.shlex]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "1.3.0 -> 2.0.1"
+notes = "Delta: 2.0 removes deprecated nul-unsafe APIs (RUSTSEC-2024-0006 follow-up), replaces unsound DerefMut with safe unsafe-fn alternatives (from_bytes, as_bytes_mut). No build script, no proc macros, no powerful imports, no_std-compatible. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.windows-link]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.2.0 -> 0.2.1"
+notes = "Metadata-only delta: version bump and readme field casing. No source code changes. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.windows-result]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+version = "0.4.1"
+notes = "Windows HRESULT/Error/BOOL/Result types. ~15 unsafe blocks for FFI to kernel32/oleaut32 error APIs and COM vtable calls, all sound. No build script, no proc macros, no fs/net/process access. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[audits.windows-sys]]
+who = "Jerry Xie <jerryxie@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.59.0 -> 0.61.2"
+notes = "Auto-generated Windows API FFI bindings. No unsafe blocks, no build script, no proc macros, no_std. Delta switches link dep from windows-targets to windows-link. All changes are mechanical API binding additions/removals. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
+
+[[trusted.libc]]
+criteria = "safe-to-deploy"
+user-id = 55123 # rust-lang-owner
+start = "2024-08-15"
+end = "2027-06-09"

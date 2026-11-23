@@ -9,7 +9,7 @@ readme = "README.md"
 keywords = [ "embedded", "async", "npcx490m", "nuvoton", "embedded-hal" ]
 categories = [ "embedded", "hardware-support", "no-std", "asynchronous" ]
 repository = "https://github.com/OpenDevicePartnership/embassy-npcx"
-rust-version = "1.87.0"
+rust-version = "1.88.0"
 
 [features]
 default = ["rt"]

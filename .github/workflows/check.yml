@@ -153,7 +153,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        msrv: ["1.87"] # heapless 0.9.3 (via embassy-sync) requires 1.87
+        msrv: ["1.88"] # heapless 0.9.4 (via embassy-sync) requires 1.88
     name: ubuntu / ${{ matrix.msrv }}
     steps:
       - uses: actions/checkout@v4

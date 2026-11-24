@@ -19,6 +19,11 @@ criteria = "safe-to-deploy"
 delta = "0.8.8 -> 0.8.9"
 notes = "Delta: adds aarch64 Windows platform support and tvOS/watchOS cfg. New unsafe in context_init and assembly follows existing x86_64 Windows patterns. No new dependencies or capabilities. Assisted-by: GitHub Copilot:claude-opus-4.6 cargo-vet"
 
+[[audits.heapless]]
+who = "Felipe Balbi <felipe.balbi@microsoft.com>"
+criteria = "safe-to-deploy"
+delta = "0.9.3 -> 0.9.4"
+
 [[audits.log]]
 who = "Jerry Xie <jerryxie@microsoft.com>"
 criteria = "safe-to-deploy"
